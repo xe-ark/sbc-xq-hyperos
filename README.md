@@ -1,4 +1,4 @@
-# HyperOS / Android SBC XQ (Dual Channel 552 kbps) Enabler & Patcher
+# HyperOS SBC XQ (Dual Channel 552 kbps) Enabler & Patcher
 
 An automated patcher, ARM64 assembly code-cave injector, and Magisk/KernelSU module generator that enables **SBC XQ (SBC Dual Channel at 452 / 552 kbps)** on Android (HyperOS / AOSP / LineageOS) with Developer Options UI integration.
 
