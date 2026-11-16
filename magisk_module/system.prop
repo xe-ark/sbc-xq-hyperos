@@ -1,0 +1,2 @@
+persist.bluetooth.a2dp_offload.disabled=true
+persist.bluetooth.a2dp_offload.cap=aac-ldac-mihc

@@ -1,0 +1,31 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Android binaries and packages (avoid OEM proprietary blobs)
+*.so
+*.apk
+*.dex
+*.apex
+*.zip
+*.jar
+
+# Build output directories
+sbc_xq_out/
+out/
+build/
+dist/
+tmp/
+*.tmp
+
+# Patch artifacts
+*.orig
+*.rej
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*~

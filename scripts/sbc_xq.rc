@@ -1,0 +1,9 @@
+# Enable SBC XQ (Dual Channel 452/551 kbps) at boot before audio HAL/audioserver and after APEX activation
+on post-fs-data
+    setprop persist.bluetooth.a2dp_offload.disabled true
+    setprop persist.bluetooth.a2dp_offload.cap aac-ldac-mihc
+
+on property:apexd.status=ready
+    mount overlay overlay /apex/com.android.bt/lib64 lowerdir=/system/lib64/sbc_xq:/apex/com.android.bt/lib64
+    setprop persist.bluetooth.a2dp_offload.disabled true
+    setprop persist.bluetooth.a2dp_offload.cap aac-ldac-mihc

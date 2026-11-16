@@ -1,0 +1,14 @@
+--- a/com/android/settings/development/BluetoothA2dpHwOffloadPreferenceController.smali
++++ b/com/android/settings/development/BluetoothA2dpHwOffloadPreferenceController.smali
+@@ -1,15 +1,6 @@
+ .method private isA2dpOffloadPreferenceEnable(Landroid/content/Context;)Z
+-    # Stock implementation checks system properties and attempts to keep HW offload enabled
+-    .registers 2
+-    ...
+-    return v0
++    .locals 0
++
++    const/4 p0, 0x0
++
++    return p0
+ .end method

@@ -1,0 +1,6 @@
+id=sbc_xq_enabler
+name=HyperOS / Android SBC XQ Enabler (Dual Channel 552 kbps)
+version=v1.0
+versionCode=100
+author=xe-ark
+description=Enables SBC XQ (Dual Channel 452/552 kbps) audio codec, patches libbluetooth_jni.so code cave, disables hardware offload, and provides developer options UI.
