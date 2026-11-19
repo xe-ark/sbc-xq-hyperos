@@ -1,6 +1,6 @@
 #!/system/bin/sh
-# Ensure SBC XQ properties and bind-mount patched libbluetooth_jni.so across namespaces
-resetprop -n persist.bluetooth.a2dp_offload.disabled true
+# Ensure Hybrid A2DP properties and bind-mount patched libbluetooth_jni.so across namespaces
+resetprop -n persist.bluetooth.a2dp_offload.disabled false
 resetprop -n persist.bluetooth.a2dp_offload.cap aac-ldac-mihc
 
 TGT=/apex/com.android.bt/lib64/libbluetooth_jni.so

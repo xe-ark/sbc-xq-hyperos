@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-apply_sbc_xq.py - Automated HyperOS / Android SBC XQ Enabler & Patcher
+apply_sbc_xq.py - Automated HyperOS / Android SBC XQ & Hybrid A2DP Offload Patcher
 
 Patches:
   1. libbluetooth_jni.so (inside com.android.bt.apex):
@@ -11,16 +11,21 @@ Patches:
          choose Dual Channel (0x04) vs stock Stereo/Joint (0x09).
        * Forces Dual Channel placement and switches target bitrates to 552 kbps
          (fallback 328 kbps) when s16ChannelMode == 1 (SBC_DUAL_CHANNEL).
-  2. Settings.apk (hybrid repack preserving original V2/V3/V4 APK Sig Block 42):
-     - Disables BluetoothA2dpHwOffloadPreferenceController so HyperOS UI never
-       resets persist.bluetooth.a2dp_offload.disabled to "false".
+  2. Hybrid A2DP Offload Architecture:
+     - Maintains persist.bluetooth.a2dp_offload.disabled=false so hardware DSP offload
+       remains fully operational for LDAC (96kHz/990kbps), AAC, and LHDC/MIHC.
+     - Sets persist.bluetooth.a2dp_offload.cap=aac-ldac-mihc to filter out SBC from HW offload.
+     - Overlays vendor audio policy (audio_policy_configuration_a2dp_offload_enable_cg_enable.xml)
+       with AUDIO_FORMAT_SBC removed from primary HW mixports, allowing seamless SW routing
+       for SBC / SBC-XQ without disabling hardware offload for high-res codecs.
+  3. Settings.apk (hybrid repack preserving original V2/V3/V4 APK Sig Block 42):
      - Injects "SBC XQ" right below "SBC" in BluetoothAudioCodecPreferenceController
        using codecSpecific3 = 0x5851.
-  3. Boot init & KernelSU/Magisk scripts:
+  4. Boot init & KernelSU/Magisk scripts:
      - ROM mode: /system/etc/init/sbc_xq.rc + /system/lib64/sbc_xq/libbluetooth_jni.so
-       + /system_ext/priv-app/Settings/Settings.apk (removes Settings/oat).
+       + /system_ext/priv-app/Settings/Settings.apk + vendor audio policy overlay.
      - ADB live mode: post-fs-data.d/sbc_xq_prop.sh, service.d/sbc_xq.sh,
-       /data/adb/sbc_xq/libbluetooth_jni.so, and /data/adb/modules/sbc_xq/ (nomount).
+       /data/adb/sbc_xq/libbluetooth_jni.so, and /data/adb/modules/sbc_xq/.
 
 Usage:
   python3 apply_sbc_xq.py --dry-run
@@ -43,6 +48,8 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 DEFAULT_ROM_DIR = "/home/emre/ROM_Mutfagi/OS4.0.5.0_work/extracted"
 DEFAULT_APKTOOL_GLOBS = [
@@ -123,27 +130,33 @@ SECTIONS {{
 }}
 """
 
-SBC_XQ_RC = """# Enable SBC XQ (Dual Channel 452/551 kbps) at boot before audio HAL/audioserver and after APEX activation
+SBC_XQ_RC = """# Enable SBC XQ (Dual Channel 452/552 kbps) with Hybrid A2DP Offload
 on post-fs-data
-    setprop persist.bluetooth.a2dp_offload.disabled true
+    setprop persist.bluetooth.a2dp_offload.disabled false
     setprop persist.bluetooth.a2dp_offload.cap aac-ldac-mihc
 
 on property:apexd.status=ready
     mount overlay overlay /apex/com.android.bt/lib64 lowerdir=/system/lib64/sbc_xq:/apex/com.android.bt/lib64
-    setprop persist.bluetooth.a2dp_offload.disabled true
+    setprop persist.bluetooth.a2dp_offload.disabled false
     setprop persist.bluetooth.a2dp_offload.cap aac-ldac-mihc
 """
 
 SBC_XQ_PROP_SH = """#!/system/bin/sh
-# Set A2DP offload props in post-fs-data BEFORE audioserver & audio HAL start
-resetprop -n persist.bluetooth.a2dp_offload.disabled true
+# Set Hybrid A2DP offload props in post-fs-data BEFORE audioserver & audio HAL start
+resetprop -n persist.bluetooth.a2dp_offload.disabled false
 resetprop -n persist.bluetooth.a2dp_offload.cap aac-ldac-mihc
 """
 
 SBC_XQ_SH = """#!/system/bin/sh
-# Ensure SBC XQ properties and bind-mount patched libbluetooth_jni.so across namespaces
-resetprop -n persist.bluetooth.a2dp_offload.disabled true
+# Ensure Hybrid A2DP properties and bind-mount patched libbluetooth_jni.so across namespaces
+resetprop -n persist.bluetooth.a2dp_offload.disabled false
 resetprop -n persist.bluetooth.a2dp_offload.cap aac-ldac-mihc
+
+XML_SRC="/system/vendor/etc/audio_policy_configuration_a2dp_offload_enable_cg_enable.xml"
+XML_DST="/vendor/etc/audio_policy_configuration_a2dp_offload_enable_cg_enable.xml"
+if [ -f "$XML_SRC" ] && grep -q "AUDIO_FORMAT_SBC" "$XML_DST" 2>/dev/null; then
+    mount -o bind "$XML_SRC" "$XML_DST" 2>/dev/null || true
+fi
 
 TGT=/apex/com.android.bt/lib64/libbluetooth_jni.so
 SRC=/data/adb/sbc_xq/libbluetooth_jni.so
@@ -178,11 +191,11 @@ fi
 """
 
 MODULE_PROP = """id=sbc_xq
-name=SBC XQ & DevOpts Codec Toggle
-version=v1.0
-versionCode=1
+name=SBC XQ & Hybrid A2DP Offload
+version=v1.1
+versionCode=110
 author=apply_sbc_xq.py
-description=Mounts patched Settings.apk with SBC XQ Developer Options entry and offload lock.
+description=Enables SBC XQ (Dual Channel 552 kbps) with Hybrid A2DP Offload (SBC in SW, LDAC/AAC in HW).
 """
 
 PATCHED_BLUETOOTH_AUDIO_CODEC_SMALI = """.class public Lcom/android/settings/development/BluetoothAudioCodecPreferenceController;
@@ -1067,7 +1080,13 @@ def patch_offload_controller_smali(text: str) -> str:
     return patched
 
 
-def patch_settings_apk(src_apk: str, out_apk: str, apktool_cmd: list[str], force: bool = False) -> str:
+def patch_settings_apk(
+    src_apk: str,
+    out_apk: str,
+    apktool_cmd: list[str],
+    force: bool = False,
+    patch_offload_pref: bool = False,
+) -> str:
     already_patched, existing_dex = verify_settings_apk_state(src_apk)
     if already_patched and not force:
         os.makedirs(os.path.dirname(out_apk), exist_ok=True)
@@ -1083,18 +1102,16 @@ def patch_settings_apk(src_apk: str, out_apk: str, apktool_cmd: list[str], force
 
         offload_hits = sorted(glob.glob(os.path.join(dec_dir, "smali*", offload_rel)))
         codec_hits = sorted(glob.glob(os.path.join(dec_dir, "smali*", codec_rel)))
-        if len(offload_hits) != 1 or len(codec_hits) != 1:
-            raise RuntimeError(
-                f"Expected 1 offload & 1 codec smali, found offload={offload_hits}, codec={codec_hits}"
-            )
+        if len(codec_hits) != 1:
+            raise RuntimeError(f"Expected 1 codec smali, found codec={codec_hits}")
 
-        offload_smali_dir = Path(offload_hits[0]).relative_to(dec_dir).parts[0]
+        if patch_offload_pref:
+            if len(offload_hits) != 1:
+                raise RuntimeError(f"Expected 1 offload smali, found offload={offload_hits}")
+            offload_txt = Path(offload_hits[0]).read_text(encoding="utf-8")
+            Path(offload_hits[0]).write_text(patch_offload_controller_smali(offload_txt), encoding="utf-8")
+
         codec_smali_dir = Path(codec_hits[0]).relative_to(dec_dir).parts[0]
-        if offload_smali_dir != codec_smali_dir:
-            raise RuntimeError(f"Controllers split across {offload_smali_dir} and {codec_smali_dir}")
-
-        offload_txt = Path(offload_hits[0]).read_text(encoding="utf-8")
-        Path(offload_hits[0]).write_text(patch_offload_controller_smali(offload_txt), encoding="utf-8")
         Path(codec_hits[0]).write_text(PATCHED_BLUETOOTH_AUDIO_CODEC_SMALI, encoding="utf-8")
 
         # Compile only the modified DEX in an isolated api-34 minimal apktool project
@@ -1172,6 +1189,19 @@ def apply_to_rom(
         shutil.rmtree(rom_settings_oat)
         print(f"Removed stale OAT dir: {rom_settings_oat}")
 
+    # Apply hybrid audio policy configuration XML if vendor directory exists
+    vendor_xml_candidates = [
+        os.path.join(rom_dir, "vendor/etc/audio_policy_configuration_a2dp_offload_enable_cg_enable.xml"),
+        os.path.join(rom_dir, "system/vendor/etc/audio_policy_configuration_a2dp_offload_enable_cg_enable.xml"),
+    ]
+    template_xml = SCRIPT_DIR / "magisk_module/system/vendor/etc/audio_policy_configuration_a2dp_offload_enable_cg_enable.xml"
+    if template_xml.is_file():
+        for cand in vendor_xml_candidates:
+            if os.path.exists(os.path.dirname(cand)):
+                shutil.copy2(template_xml, cand)
+                os.chmod(cand, 0o644)
+                print(f"Hybrid audio policy XML applied to ROM: {cand}")
+
     print(f"ROM updated:\n  {rom_libbt}\n  {rom_rc}\n  {rom_settings}")
 
     if run_sync_verify:
@@ -1207,6 +1237,11 @@ def apply_to_adb(
     ]:
         run(base + ["push", path, f"{stage}/{name}"])
 
+    template_xml = SCRIPT_DIR / "magisk_module/system/vendor/etc/audio_policy_configuration_a2dp_offload_enable_cg_enable.xml"
+    has_xml = template_xml.is_file()
+    if has_xml:
+        run(base + ["push", str(template_xml), f"{stage}/audio_policy_configuration_a2dp_offload_enable_cg_enable.xml"])
+
     with tempfile.NamedTemporaryFile("w", suffix=".prop", delete=False) as tf:
         tf.write(MODULE_PROP)
         mod_prop_tmp = tf.name
@@ -1215,9 +1250,20 @@ def apply_to_adb(
     finally:
         os.unlink(mod_prop_tmp)
 
+    xml_install_subcmd = (
+        f"mkdir -p /data/adb/modules/sbc_xq/system/vendor/etc && "
+        f"cp -f {stage}/audio_policy_configuration_a2dp_offload_enable_cg_enable.xml "
+        f"/data/adb/modules/sbc_xq/system/vendor/etc/audio_policy_configuration_a2dp_offload_enable_cg_enable.xml && "
+        f"chmod 0644 /data/adb/modules/sbc_xq/system/vendor/etc/audio_policy_configuration_a2dp_offload_enable_cg_enable.xml && "
+        f"chcon u:object_r:vendor_configs_file:s0 /data/adb/modules/sbc_xq/system/vendor/etc/audio_policy_configuration_a2dp_offload_enable_cg_enable.xml 2>/dev/null || true && "
+        if has_xml
+        else ""
+    )
+
     install_cmd = (
         f"mkdir -p /data/adb/sbc_xq /data/adb/post-fs-data.d /data/adb/service.d "
         f"/data/adb/modules/sbc_xq/system_ext/priv-app/Settings/oat && "
+        f"{xml_install_subcmd}"
         f"cp -f {stage}/libbluetooth_jni.so /data/adb/sbc_xq/libbluetooth_jni.so && "
         f"chmod 0644 /data/adb/sbc_xq/libbluetooth_jni.so && "
         f"chcon u:object_r:system_lib_file:s0 /data/adb/sbc_xq/libbluetooth_jni.so 2>/dev/null || true && "
@@ -1284,6 +1330,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--force", action="store_true", help="Recompile Settings.apk even if already patched")
     p.add_argument("--run-sync-verify", action="store_true", help="Run sync_and_verify.py after --apply-rom")
     p.add_argument("--sync-script", help="Explicit path to sync_and_verify.py")
+    p.add_argument("--patch-offload-pref", action="store_true", help="Force patch BluetoothA2dpHwOffloadPreferenceController (legacy mode; disabled by default for hybrid offload)")
     p.add_argument("--build-module", nargs="?", const="sbc_xq_magisk_module.zip", help="Build a flashable Magisk/KernelSU ZIP module (default name: sbc_xq_magisk_module.zip)")
     return p.parse_args()
 
@@ -1310,7 +1357,9 @@ def main() -> int:
     lib_status = patch_libbluetooth_jni(src_libbt, libbt_out, force=args.force)
     print(f"[2/4] {lib_status}")
 
-    set_status = patch_settings_apk(src_settings, settings_out, apktool_cmd, force=args.force)
+    set_status = patch_settings_apk(
+        src_settings, settings_out, apktool_cmd, force=args.force, patch_offload_pref=args.patch_offload_pref
+    )
     print(f"[3/4] {set_status}")
 
     Path(rc_out).write_text(SBC_XQ_RC, encoding="utf-8")

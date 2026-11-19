@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_module.py - Build Magisk / KernelSU flashable ZIP for SBC XQ Enabler
+build_module.py - Build Magisk / KernelSU flashable ZIP for SBC XQ & Hybrid A2DP Offload
 
 Packages:
   - module.prop
@@ -8,7 +8,8 @@ Packages:
   - post-fs-data.sh
   - service.sh
   - customize.sh
-  - libbluetooth_jni.so (ARM64 patched binary)
+  - [Optional] libbluetooth_jni.so (ARM64 patched binary)
+  - [Optional] audio_policy_configuration_a2dp_offload_enable_cg_enable.xml (Vendor audio policy overlay)
   - [Optional] Settings.apk (system_ext/priv-app/Settings/Settings.apk)
 
 Usage:
@@ -27,14 +28,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 def build_zip(
-    libbt_path: str,
+    libbt_path: str | None,
     settings_path: str | None,
     out_zip: str,
     module_dir: str | Path | None = None,
+    audio_policy_path: str | None = None,
 ) -> str:
-    if not os.path.isfile(libbt_path):
-        raise FileNotFoundError(f"Patched libbluetooth_jni.so not found: {libbt_path}")
-
     mod_dir = Path(module_dir or (SCRIPT_DIR / "magisk_module"))
     if not mod_dir.is_dir():
         raise FileNotFoundError(f"Module template dir not found: {mod_dir}")
@@ -59,12 +58,32 @@ def build_zip(
             z.writestr(zi, file_data)
             print(f"  + {rf}")
 
-        # Write patched libbluetooth_jni.so
-        libbt_bytes = Path(libbt_path).read_bytes()
-        zi = zipfile.ZipInfo("libbluetooth_jni.so")
-        zi.external_attr = 0o644 << 16
-        z.writestr(zi, libbt_bytes)
-        print(f"  + libbluetooth_jni.so ({len(libbt_bytes):,} bytes)")
+        # Write patched libbluetooth_jni.so if provided
+        if libbt_path:
+            if not os.path.isfile(libbt_path):
+                raise FileNotFoundError(f"Patched libbluetooth_jni.so not found: {libbt_path}")
+            libbt_bytes = Path(libbt_path).read_bytes()
+            zi = zipfile.ZipInfo("libbluetooth_jni.so")
+            zi.external_attr = 0o644 << 16
+            z.writestr(zi, libbt_bytes)
+            print(f"  + libbluetooth_jni.so ({len(libbt_bytes):,} bytes)")
+
+        # Write Hybrid audio policy configuration XML if available
+        xml_file = None
+        if audio_policy_path and os.path.isfile(audio_policy_path):
+            xml_file = Path(audio_policy_path)
+        else:
+            default_xml = mod_dir / "system/vendor/etc/audio_policy_configuration_a2dp_offload_enable_cg_enable.xml"
+            if default_xml.is_file():
+                xml_file = default_xml
+
+        if xml_file:
+            xml_bytes = xml_file.read_bytes()
+            xml_dest = "system/vendor/etc/audio_policy_configuration_a2dp_offload_enable_cg_enable.xml"
+            zi_xml = zipfile.ZipInfo(xml_dest)
+            zi_xml.external_attr = 0o644 << 16
+            z.writestr(zi_xml, xml_bytes)
+            print(f"  + {xml_dest} ({len(xml_bytes):,} bytes)")
 
         # Optional Settings.apk
         if settings_path and os.path.isfile(settings_path):
@@ -86,15 +105,16 @@ def build_zip(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build Magisk / KernelSU module ZIP for SBC XQ")
-    parser.add_argument("--libbt", required=True, help="Path to patched libbluetooth_jni.so")
+    parser = argparse.ArgumentParser(description="Build Magisk / KernelSU module ZIP for SBC XQ & Hybrid A2DP Offload")
+    parser.add_argument("--libbt", help="Path to patched libbluetooth_jni.so (optional)")
+    parser.add_argument("--audio-policy", help="Path to audio_policy_configuration_a2dp_offload_enable_cg_enable.xml (optional)")
     parser.add_argument("--settings", help="Optional path to patched Settings.apk")
-    parser.add_argument("--out", default="sbc_xq_module.zip", help="Output ZIP path (default: sbc_xq_module.zip)")
+    parser.add_argument("--out", default="sbc_xq_hybrid_module.zip", help="Output ZIP path (default: sbc_xq_hybrid_module.zip)")
     parser.add_argument("--module-dir", help="Path to magisk_module directory")
 
     args = parser.parse_args()
     try:
-        build_zip(args.libbt, args.settings, args.out, args.module_dir)
+        build_zip(args.libbt, args.settings, args.out, args.module_dir, args.audio_policy)
         return 0
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
